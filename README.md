@@ -140,6 +140,9 @@ In App:
 
 Use VScode with platformio extension
 
-:warning: do NOT configure platformio to use latest TFT_eSPI. It does not work.
+:warning: do NOT configure platformio to use latest TFT_eSPI. It did not work for me.
 
-Instead, clone https://github.com/Xinyuan-LilyGO/T-Display-S3 and recursive copy lib/TTF_eSPI to .pio/libdeps/ESP32-S3-DevKitC-1/
+What I did:
+- wait for platformio to update TFT_eSPI library
+- clone https://github.com/Xinyuan-LilyGO/T-Display-S3
+- recursive copy T-Display-S3/lib/TFT_eSPI over .pio/libdeps/ESP32-S3-DevKitC-1/TFT_eSPI
