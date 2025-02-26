@@ -5,14 +5,17 @@
 #include "TFT_eSPI.h"
 #include "WiFi.h"
 #include "esp_wifi.h"
+#include <WebServer.h>
 
 #include "apps.h"
-#include "lib/log.h"
 #include "lib/compile_time.h"
+#include "lib/log.h"
 #include "os_config.h"
 #include "resources/fonts/InterRegular16.h"
 #include "resources/icons.h"
 #include "themes.h"
+
+WebServer server(80);
 
 #define USE_DMA_TO_TFT
 
@@ -41,7 +44,14 @@ OneButton btn2 = OneButton(PIN_BUTTON_2);
 uint32_t batteryStatus;
 
 String wifi_ssid = "";
-String wifi_passwd = "";
+String wifi_password = "";
+bool show_setup = false; // Track if show setup have been triggered
+bool apMode = false;     // Track whether we are in AP mode
+
+// NTP Server & Timezone
+const char *ntpServer = "pool.ntp.org";
+const long gmtOffset_sec = 1 * 3600; // Adjust for your timezone
+const int daylightOffset_sec = 1 * 3600;
 
 uint32_t sleepTimer = 0;
 
@@ -64,8 +74,9 @@ void refreshPreferences() {
   preferences.begin(PREFS_KEY);
   brightness = preferences.getUInt("brightness", 200);
   wifi_ssid = preferences.getString("wifi_ssid", "");
-  wifi_passwd = preferences.getString("wifi_passwd", "");
+  wifi_password = preferences.getString("wifi_password", "");
   currentThemeIndex = preferences.getUInt("current_theme", 0);
+  show_setup = preferences.getUInt("show_setup", 1);
   preferences.end();
 }
 
@@ -80,6 +91,65 @@ void enterSleep() {
   esp_deep_sleep_start();
   // after wakeup
   esp_wifi_start();
+}
+
+// Function to serve the Wi-Fi config page
+void handleHttpRoot() {
+  server.send(200, "text/html",
+              "<html><body><h1>T-Display S3 Clock Setup</h1>"
+              "<form action='/save' method='POST'>"
+              "<h2>Clock General Settings</h2>"
+              "Device Name: <input type='text' name='clock_name'><br>"
+              "Theme: <input type='text' name='clock_theme'><br>"
+              "<h2>Clock Time Settings</h2>"
+              "NTP server: <input type='text' name='clock_ntp_server'><br>"
+              "<h2>Clock Weather Settings</h2>"
+              "OpenWeather API Key: <input type='text' name='clock_openweather_api_key'><br>"
+              "OpenWeather City: <input type='text' name='clock_openweather_city'><br>"
+              "OpenWeather Zone: <input type='text' name='clock_openweather_zone'><br>"
+              "<h2>Clock WIFI Settings</h2>"
+              "SSID: <input type='text' name='wifi_ssid'><br>"
+              "Password: <input type='password' name='wifi_password'><br>"
+              "<br>"
+              "<input type='submit' value='Save & Reboot'><br><br>"
+              "</form>"
+              "<h1>System Defaults</h1>"
+              "<input type='button' value='Reset T-Display S3 Clock' onclick='resetWifi()'>"
+              "<script>"
+              "function resetWifi() {"
+              "  if (confirm('Are you sure you want to reset the Wi-Fi settings?')) {"
+              "    window.location.href = '/reset';"
+              "  }"
+              "}"
+              "</script>"
+              "</body></html>");
+}
+
+// Handle form submission
+void handleHttpSave() {
+  String wifi_ssid = server.arg("wifi_ssid");
+  String wifi_password = server.arg("wifi_password");
+
+  if (wifi_ssid.length() > 0 && wifi_password.length() > 0) {
+    preferences.begin(PREFS_KEY);
+    preferences.putString("wifi_ssid", wifi_ssid);
+    preferences.putString("wifi_password", wifi_password);
+    preferences.putUInt("show_setup", 0);
+    preferences.end();
+    server.send(200, "text/html", "<html><body><h2>Settings Saved! Rebooting...</h2></body></html>");
+    delay(2000);
+    ESP.restart();
+  } else {
+    server.send(400, "text/html", "<html><body><h2>Error: Missing SSID or Password</h2></body></html>");
+  }
+}
+
+// Handle the reset request (erase Wi-Fi settings)
+void handleReset() {
+  preferences.clear(); // Clear stored Wi-Fi credentials
+  server.send(200, "text/html", "<html><body><h2>Settings Reset. Rebooting...</h2></body></html>");
+  delay(2000);   // Give time for the response to be shown
+  ESP.restart(); // Restart the ESP32
 }
 
 void switchToHome();
@@ -205,7 +275,8 @@ void setup() {
   log(LOG_SUCCESS, "Hardware buttons initiliazed");
 
   // hacky workaround for setting rtc to compile time
-  if (rtc.getYear() == 1970) rtc.setTime((long) UNIX_TIMESTAMP);
+  if (rtc.getYear() == 1970)
+    rtc.setTime((long)UNIX_TIMESTAMP);
   log(LOG_SUCCESS, "RTC time configured");
 
   timerSemaphore = xSemaphoreCreateBinary();
@@ -224,10 +295,54 @@ void setup() {
 
   WiFi.onEvent(WiFiConnected, WiFiEvent_t::ARDUINO_EVENT_WIFI_STA_CONNECTED);
 
-  if (wifi_ssid != "") {
+  if (wifi_ssid == "" || wifi_password == "" || show_setup) {
+    Serial.println("No Wi-Fi or 'Clock Setup' triggered, Starting AP mode...");
+
+    WiFi.softAP("ESP32_Config", "12345678");
+    Serial.println("AP Started. Connect to 'ESP32_Config'");
+    apMode = true;
+
+    // Start the web server
+    server.on("/", handleHttpRoot);
+    server.on("/save", HTTP_POST, handleHttpSave);
+    server.on("/reset", HTTP_GET, handleReset);
+    server.begin();
+  } else {
+    Serial.println("Connecting to Wi-Fi...");
     WiFi.mode(WIFI_STA);
-    WiFi.begin(wifi_ssid.c_str(), wifi_passwd.c_str());
-    log(LOG_SUCCESS, "WiFi connection started");
+    WiFi.begin(wifi_ssid.c_str(), wifi_password.c_str());
+
+    // Wait for connection
+    int attempts = 0;
+    while (WiFi.status() != WL_CONNECTED && attempts < 20) {
+      delay(500);
+      Serial.print(".");
+      attempts++;
+    }
+
+    if (WiFi.status() == WL_CONNECTED) {
+      Serial.println("\nWi-Fi Connected!");
+      Serial.println(WiFi.localIP());
+      // Synchronize with NTP
+      configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
+      struct tm timeinfo;
+      if (!getLocalTime(&timeinfo)) {
+        Serial.println("Failed to obtain time");
+        return;
+      }
+      // Save to RTC
+      // Convert tm to time_t
+      time_t now = mktime(&timeinfo);
+      // Set timeval struct
+      struct timeval tv;
+      tv.tv_sec = now;
+      tv.tv_usec = 0;
+      // Update system time
+      settimeofday(&tv, NULL);
+      Serial.println("Time synchronized!");
+    } else {
+      Serial.println("\nFailed to connect.");
+    }
   }
 
   themes[currentThemeIndex]->drawHomeUI(tft, rtc, batteryStatus);
@@ -248,7 +363,7 @@ void loop() {
   if (xSemaphoreTake(timerSemaphore, 0) == pdTRUE) {
     if (cState != InApp && batteryStatus != 100)
       sleepTimer++;
-    if (cState == Home) 
+    if (cState == Home)
       themes[currentThemeIndex]->drawHomeUI(tft, rtc, batteryStatus);
     batteryStatus = constrain(map((analogRead(PIN_BAT_VOLT) * 2 * 3.3 * 1000) / 4096, 3200, 3900, 0, 100), 0, 100);
   }
@@ -265,6 +380,10 @@ void loop() {
   case InApp:
     apps[currentAppIndex]->drawUI(tft);
     break;
+  }
+  // **Handle Web Requests Only in AP Mode**
+  if (apMode) {
+    server.handleClient(); // Process HTTP requests in AP mode
   }
 }
 
@@ -299,6 +418,7 @@ void switchToApp() {
   apps[currentAppIndex]->setup();
   tft.fillScreen(TFT_BLACK);
   ledcWrite(0, 0);
-  if (!apps[currentAppIndex]->skipFirstRefresh) apps[currentAppIndex]->drawUI(tft);
+  if (!apps[currentAppIndex]->skipFirstRefresh)
+    apps[currentAppIndex]->drawUI(tft);
   fadeScreen(1, false);
 }
