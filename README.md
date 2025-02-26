@@ -135,3 +135,11 @@ In App:
         Single clicks: Change theme
 
 ```
+
+# Compilation
+
+Use VScode with platformio extension
+
+:warning: do NOT configure platformio to use latest TFT_eSPI. It does not work.
+
+Instead, clone https://github.com/Xinyuan-LilyGO/T-Display-S3 and recursive copy lib/TTF_eSPI to .pio/libdeps/ESP32-S3-DevKitC-1/
