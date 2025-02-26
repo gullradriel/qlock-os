@@ -41,21 +41,23 @@ ESP32Time rtc(0);
 OneButton btn1 = OneButton(PIN_BUTTON_1);
 OneButton btn2 = OneButton(PIN_BUTTON_2);
 
-uint32_t batteryStatus;
-
+String device_name = "QClock Device";
 String wifi_ssid = "";
 String wifi_password = "";
+String clock_theme = "Clean Blue";
+String clock_ntp_server_1 = "pool.ntp.org";
+String clock_ntp_server_2 = "time.nist.gov";
+long clock_ntp_gmtoffset_sec = 1 * 3600;     // default GMT zone
+int clock_ntp_daylightoffset_sec = 1 * 3600; // default daylight time offset
+String clock_openweather_api_key = "";
+String clock_openweather_city = "";
+String clock_openweather_zone = "";
+uint32_t clock_sleep_timer = 30;
+
 bool show_setup = false; // Track if show setup have been triggered
 bool apMode = false;     // Track whether we are in AP mode
-
-// NTP Server & Timezone
-const char *ntpServer = "pool.ntp.org";
-const long gmtOffset_sec = 1 * 3600; // Adjust for your timezone
-const int daylightOffset_sec = 1 * 3600;
-
+uint32_t batteryStatus = 0;
 uint32_t sleepTimer = 0;
-
-void WiFiConnected(WiFiEvent_t event, WiFiEventInfo_t info) { configTime(GMT_OFFSET_SEC, DAY_LIGHT_OFFSET_SEC, NTP_SERVER1); }
 
 void ARDUINO_ISR_ATTR onTimer() { xSemaphoreGiveFromISR(timerSemaphore, NULL); }
 
@@ -99,30 +101,58 @@ void handleHttpRoot() {
               "<html><body><h1>T-Display S3 Clock Setup</h1>"
               "<form action='/save' method='POST'>"
               "<h2>Clock General Settings</h2>"
-              "Device Name: <input type='text' name='clock_name'><br>"
-              "Theme: <input type='text' name='clock_theme'><br>"
-              "<h2>Clock Time Settings</h2>"
-              "NTP server: <input type='text' name='clock_ntp_server'><br>"
-              "<h2>Clock Weather Settings</h2>"
-              "OpenWeather API Key: <input type='text' name='clock_openweather_api_key'><br>"
-              "OpenWeather City: <input type='text' name='clock_openweather_city'><br>"
-              "OpenWeather Zone: <input type='text' name='clock_openweather_zone'><br>"
-              "<h2>Clock WIFI Settings</h2>"
-              "SSID: <input type='text' name='wifi_ssid'><br>"
-              "Password: <input type='password' name='wifi_password'><br>"
-              "<br>"
-              "<input type='submit' value='Save & Reboot'><br><br>"
-              "</form>"
-              "<h1>System Defaults</h1>"
-              "<input type='button' value='Reset T-Display S3 Clock' onclick='resetWifi()'>"
-              "<script>"
-              "function resetWifi() {"
-              "  if (confirm('Are you sure you want to reset the Wi-Fi settings?')) {"
-              "    window.location.href = '/reset';"
-              "  }"
-              "}"
-              "</script>"
-              "</body></html>");
+              "Device Name: <input type='text' name='device_name' value=" +
+                  device_name +
+                  "><br>"
+                  "Sleep Timer: <input type='text' name='clock_sleep_timer' value=" +
+                  String(clock_sleep_timer) +
+                  "><br>"
+                  "Theme: <input type='text' name='clock_theme' value=" +
+                  clock_theme +
+                  "><br>"
+                  "<h2>Clock NTP Settings</h2>"
+                  "NTP server 1: <input type='text' name='clock_ntp_server_1' value='" +
+                  clock_ntp_server_1 +
+                  "'><br>"
+                  "NTP server 2: <input type='text' name='clock_ntp_server_2' value='" +
+                  clock_ntp_server_2 +
+                  "'><br>"
+                  "NTP GMT OFFSET (seconds): <input type='text' name='clock_ntp_gmtoffset_sec' value='" +
+                  String(clock_ntp_gmtoffset_sec) +
+                  "'><br>"
+                  "NTP DAYLIGHT OFFSET (seconds): <input type='text' name='clock_ntp_daylightoffset_sec' value='" +
+                  String(clock_ntp_daylightoffset_sec) +
+                  "'><br>"
+                  "<h2>Clock Weather Settings</h2>"
+                  "OpenWeather API Key: <input type='text' name='clock_openweather_api_key' value='" +
+                  clock_openweather_api_key +
+                  "'><br>"
+                  "OpenWeather City: <input type='text' name='clock_openweather_city' value='" +
+                  clock_openweather_city +
+                  "'><br>"
+                  "OpenWeather Zone: <input type='text' name='clock_openweather_zone' value='" +
+                  clock_openweather_zone +
+                  "'><br>"
+                  "<h2>Clock WIFI Settings</h2>"
+                  "SSID: <input type='text' name='wifi_ssid' value='" +
+                  wifi_ssid +
+                  "'><br>"
+                  "Password: <input type='password' name='wifi_password' value='" +
+                  wifi_password +
+                  "'><br>"
+                  "<br>"
+                  "<input type='submit' value='Save & Reboot'><br><br>"
+                  "</form>"
+                  "<h1>Reset System Settings</h1>"
+                  "<input type='button' value='Reset T-Display S3 Clock' onclick='resetClock()'>"
+                  "<script>"
+                  "function resetClock() {"
+                  "  if (confirm('Are you sure you want to reset the clock's settings?')) {"
+                  "    window.location.href = '/reset';"
+                  "  }"
+                  "}"
+                  "</script>"
+                  "</body></html>");
 }
 
 // Handle form submission
@@ -147,7 +177,7 @@ void handleHttpSave() {
 // Handle the reset request (erase Wi-Fi settings)
 void handleReset() {
   preferences.clear(); // Clear stored Wi-Fi credentials
-  server.send(200, "text/html", "<html><body><h2>Settings Reset. Rebooting...</h2></body></html>");
+  server.send(200, "text/html", "<html><body><h2>Clock's Settings Reset. Rebooting...</h2></body></html>");
   delay(2000);   // Give time for the response to be shown
   ESP.restart(); // Restart the ESP32
 }
@@ -156,6 +186,11 @@ void switchToHome();
 void switchToAppsList();
 void switchToApp();
 bool connectToWifi();
+
+void WiFiConnected(WiFiEvent_t event, WiFiEventInfo_t info) {
+  // Synchronize with NTP
+  configTime(clock_ntp_gmtoffset_sec, clock_ntp_daylightoffset_sec, clock_ntp_server_1.c_str(), clock_ntp_server_2.c_str(), NULL);
+}
 
 void setup() {
   pinMode(PIN_POWER_ON, OUTPUT);
@@ -178,13 +213,13 @@ void setup() {
   ledcAttachPin(PIN_LCD_BL, 0);
   ledcWrite(0, 0);
 
-  btn1.setDebounceTicks(10);
-  btn1.setClickTicks(150);
-  btn1.setPressTicks(1000);
+  btn1.setDebounceMs(10);
+  btn1.setClickMs(150);
+  btn1.setPressMs(1000);
 
-  btn2.setDebounceTicks(10);
-  btn2.setClickTicks(150);
-  btn2.setPressTicks(1000);
+  btn2.setDebounceMs(10);
+  btn2.setClickMs(150);
+  btn2.setPressMs(1000);
 
   btn1.attachClick([]() {
     sleepTimer = 0;
@@ -296,10 +331,17 @@ void setup() {
   WiFi.onEvent(WiFiConnected, WiFiEvent_t::ARDUINO_EVENT_WIFI_STA_CONNECTED);
 
   if (wifi_ssid == "" || wifi_password == "" || show_setup) {
-    Serial.println("No Wi-Fi or 'Clock Setup' triggered, Starting AP mode...");
-
-    WiFi.softAP("ESP32_Config", "12345678");
-    Serial.println("AP Started. Connect to 'ESP32_Config'");
+    log(LOG_INFO, "No Wi-Fi configured or 'Clock Setup' triggered, Starting AP mode...");
+    // Get the ESP32 MAC address
+    uint8_t mac[6];
+    WiFi.macAddress(mac);
+    // Convert the MAC address to a string
+    String macAddress =
+        String(mac[0], HEX) + String(mac[1], HEX) + String(mac[2], HEX) + String(mac[3], HEX) + String(mac[4], HEX) + String(mac[5], HEX);
+    // Create a unique SSID using the MAC address
+    String ap_ssid = "QClock-" + macAddress;
+    WiFi.softAP(ap_ssid.c_str(), "12345678");
+    log(LOG_SUCCESS, String("AP Started. Connect to '" + ap_ssid + "', '12345678'").c_str());
     apMode = true;
 
     // Start the web server
@@ -308,7 +350,7 @@ void setup() {
     server.on("/reset", HTTP_GET, handleReset);
     server.begin();
   } else {
-    Serial.println("Connecting to Wi-Fi...");
+    log(LOG_INFO, "Connecting to Wi-Fi...");
     WiFi.mode(WIFI_STA);
     WiFi.begin(wifi_ssid.c_str(), wifi_password.c_str());
 
@@ -316,19 +358,15 @@ void setup() {
     int attempts = 0;
     while (WiFi.status() != WL_CONNECTED && attempts < 20) {
       delay(500);
-      Serial.print(".");
       attempts++;
     }
-
     if (WiFi.status() == WL_CONNECTED) {
-      Serial.println("\nWi-Fi Connected!");
-      Serial.println(WiFi.localIP());
-      // Synchronize with NTP
-      configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
-      struct tm timeinfo;
+      log(LOG_SUCCESS, "Wi-Fi Connected!");
+      log(LOG_INFO, "IP: " + WiFi.localIP());
+
+      struct tm timeinfo = {0};
       if (!getLocalTime(&timeinfo)) {
-        Serial.println("Failed to obtain time");
-        return;
+        log(LOG_ERROR, "Failed to obtain time");
       }
       // Save to RTC
       // Convert tm to time_t
@@ -339,9 +377,9 @@ void setup() {
       tv.tv_usec = 0;
       // Update system time
       settimeofday(&tv, NULL);
-      Serial.println("Time synchronized!");
+      log(LOG_SUCCESS, "Time synchronized!");
     } else {
-      Serial.println("\nFailed to connect.");
+      log(LOG_ERROR, "Failed to connect to Wi-Fi !");
     }
   }
 
@@ -368,14 +406,14 @@ void loop() {
     batteryStatus = constrain(map((analogRead(PIN_BAT_VOLT) * 2 * 3.3 * 1000) / 4096, 3200, 3900, 0, 100), 0, 100);
   }
 
-  if (sleepTimer == 30 && batteryStatus != 100)
+  if (sleepTimer == clock_sleep_timer && batteryStatus != 100)
     enterSleep();
 
   switch (cState) {
   case Home:
     break;
   case AppsList:
-    drawAppsListUI(tft, batteryStatus);
+    drawAppsListUI(tft, batteryStatus, device_name);
     break;
   case InApp:
     apps[currentAppIndex]->drawUI(tft);
@@ -399,7 +437,7 @@ void switchToAppsList() {
   refreshPreferences();
   fadeScreen(1, true);
   cState = AppsList;
-  drawAppsListUI(tft, batteryStatus);
+  drawAppsListUI(tft, batteryStatus, device_name);
   fadeScreen(1, false);
 }
 
