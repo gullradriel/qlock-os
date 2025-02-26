@@ -52,7 +52,7 @@ void initApps() {
   apps.emplace_back(std::move(appAbout));
 }
 
-void drawAppsListUI(TFT_eSPI tft, uint32_t batteryStatus) {
+void drawAppsListUI(TFT_eSPI tft, uint32_t batteryStatus, String device_name) {
   TFT_eSprite s = TFT_eSprite(&tft);
   s.createSprite(tft.getViewportWidth(), tft.getViewportHeight());
   s.setSwapBytes(tft.getSwapBytes());
@@ -84,7 +84,7 @@ void drawAppsListUI(TFT_eSPI tft, uint32_t batteryStatus) {
 
   s.loadFont(InterRegular16);
   s.setTextDatum(TL_DATUM);
-  s.drawString(DEVICE_NAME, 5, 10);
+  s.drawString(device_name, 5, 10);
   s.unloadFont();
 
   s.pushImage(194, 5, 25, 25, (uint16_t *)icon_no_ble_small.pixel_data);
@@ -95,7 +95,7 @@ void drawAppsListUI(TFT_eSPI tft, uint32_t batteryStatus) {
     s.pushImage(221, 5, 25, 25, (uint16_t *)icon_no_wifi_small.pixel_data);
 
   auto batteryStatusIcon = (uint16_t *)icon_battery_charge_small.pixel_data;
-  if(batteryStatus != 100) {
+  if (batteryStatus != 100) {
     switch (batteryStatus / 20) {
     case 0:
       batteryStatusIcon = (uint16_t *)icon_battery_0_small.pixel_data;
