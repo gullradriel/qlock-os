@@ -362,7 +362,7 @@ void setup() {
     }
     if (WiFi.status() == WL_CONNECTED) {
       log(LOG_SUCCESS, "Wi-Fi Connected!");
-      log(LOG_INFO, "IP: " + WiFi.localIP());
+      log(LOG_INFO, String("IP: " + WiFi.localIP().toString()).c_str());
 
       struct tm timeinfo = {0};
       if (!getLocalTime(&timeinfo)) {
